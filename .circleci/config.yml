@@ -1,0 +1,54 @@
+version: 2
+jobs:
+  build:
+    parallelism: 1
+    resource_class: xlarge
+    machine:
+      image: ubuntu-1604:201903-01
+      docker_layer_caching: true
+    environment:
+      DOCKER_IMAGE_REPOSITORY: lookback/frontloader-image
+    steps:
+      - checkout
+      - run:
+          name: Clone submodules
+          command: |
+            git submodule sync
+            git submodule update --init --recursive
+      - run:
+          name: Build image
+          command: |
+            FRONTLOADER_GIT_FULL=`git describe --always --dirty` \
+            FRONTLOADER_GIT_VERSION=`git describe --abbrev=10 --always --dirty` \
+            ./build.sh docker
+      - store_artifacts:
+          path: disk.img
+          destination: disk.img
+      - deploy:
+          name: Push image
+          command: |
+            FRONTLOADER_GIT_VERSION=`git describe --abbrev=10 --always --dirty`
+            FRONTLOADER_GIT_FULL=`git describe --always --dirty`
+
+            docker login -u ${DOCKER_LOGIN_USER} -p ${DOCKER_LOGIN_PASSWORD}
+            docker push ${DOCKER_IMAGE_REPOSITORY}:${FRONTLOADER_GIT_VERSION}
+            docker push ${DOCKER_IMAGE_REPOSITORY}:${FRONTLOADER_GIT_FULL}
+
+            docker run \
+            -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+            -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+            -e AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION \
+            lookback/aws-cli \
+            aws ecr get-login-password | docker login --username AWS --password-stdin ${AWS_ECR_DOMAIN}
+
+            docker push ${AWS_ECR_DOMAIN}/${DOCKER_IMAGE_REPOSITORY}:${FRONTLOADER_GIT_VERSION}
+notify:
+  webhooks:
+    - url: "https://sykuurk9p8.execute-api.eu-west-1.amazonaws.com/production?hook=circleci&secret=0d897c72ddb0232c4301b791b6fd202e0569b4b4"
+
+workflows:
+  version: 2
+  build:
+    jobs:
+      - build:
+          context: org-global

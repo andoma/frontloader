@@ -1,0 +1,9 @@
+**/*~
+/frontloader/build.*
+/userland
+/kernel
+/extradisk.raw
+/disk.img
+!/kernel/.config
+!/userland/.config
+!/userland/.br

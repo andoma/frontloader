@@ -1,0 +1,10 @@
+[Unit]
+Description=Frontloader Docker Runner
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/frontloader -c /etc/frontloader.json -s local0
+Restart=always
+
+[Install]
+WantedBy=default.target

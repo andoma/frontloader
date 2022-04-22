@@ -1,0 +1,9 @@
+[submodule "frontloader/libsvc"]
+	path = frontloader/libsvc
+	url = https://github.com/andoma/libsvc
+[submodule "linux"]
+	path = linux
+	url = git@github.com:lookback/linux
+[submodule "buildroot"]
+	path = buildroot
+	url = git://git.buildroot.net/buildroot

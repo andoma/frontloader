@@ -1,0 +1,14 @@
+*~
+node_modules
+kernel/*
+userland/*
+!kernel/.config
+!userland/.config
+disk.img
+*~
+NVIDIA-Linux-*
+.download
+bootloader/bootloader
+extradisk.raw
+frontloader/build.*
+
