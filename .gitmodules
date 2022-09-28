@@ -3,7 +3,7 @@
 	url = https://github.com/andoma/libsvc
 [submodule "linux"]
 	path = linux
-	url = git@github.com:lookback/linux
+	url = https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
 [submodule "buildroot"]
 	path = buildroot
 	url = git://git.buildroot.net/buildroot
