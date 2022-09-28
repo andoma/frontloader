@@ -612,7 +612,7 @@ remote_syslog_thread(void *aux)
       TAILQ_MOVE(&ls->ls_lines, &ls->ls_sent_lines, link);
     }
 
-    stream_shutdown(s);
+    stream_shutdown(s, 0);
 
     if(use_ack) {
       pthread_mutex_unlock(&log_mutex);

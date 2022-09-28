@@ -88,8 +88,8 @@ try_connect(const char *url)
   char errbuf[512];
 
   ws_client_t *wsc =
-    ws_client_connect_url(url, control_input,  NULL, 3000,
-                          errbuf, sizeof(errbuf));
+    ws_client_create(control_input, NULL,
+                     WSC_URL(url), NULL);
   if(wsc == NULL) {
     trace(LOG_ERR, "control: Failed to connect to endpoint %s -- %s",
           url, errbuf);
