@@ -34,48 +34,17 @@ static atomic_t stats_acks_bad;
 #define LOG_ROTATE_SIZE 500000
 
 
-
-TAILQ_HEAD(logline_queue, logline);
-LIST_HEAD(logline_list, logline);
-
-struct logline {
-  TAILQ_ENTRY(logline) link;
-  LIST_ENTRY(logline) hash_link;
-  char *procname;
-  char *msg;
-  int pid;
-  int pri;
-  uint64_t msgid;
-  struct timeval tv;
-};
-
 #define MAX_LOGLINES_IN_RAM 10000
 
 #define ACK_WAIT_HASH_SIZE 2048
 #define ACK_WAIT_HASH_MASK (ACK_WAIT_HASH_SIZE - 1)
 
-static LIST_HEAD(, logsink) logsinks;
+// All logsinks that want output
+static struct logsink_list all_logsinks;
 
-typedef struct logsink {
-  LIST_ENTRY(logsink) ls_link;
-  struct logline_queue ls_lines;
-  int ls_num_loglines;
-  int ls_num_loglines_dropped;
-  ntv_t *ls_conf;
-  int ls_level;
-  pthread_cond_t ls_cond;
-  int ls_mark;
-  pthread_t ls_tid;
-  int ls_running;
+// logsinks configured from config system
+static struct logsink_list configured_logsinks;
 
-  const char *ls_errmsg;
-  stream_t *ls_stream;
-
-  // For syslog with ack
-  struct logline_queue ls_sent_lines;
-  struct logline_list *ls_ack_wait_hash;
-
-} logsink_t;
 
 
 static int logdir;
@@ -129,7 +98,7 @@ send_logline(struct timeval *tv, int pid, int pri,
   uint64_t msgid = ++msgid_generator;
   logsink_t *ls;
   const int level = pri & 7;
-  LIST_FOREACH(ls, &logsinks, ls_link) {
+  LIST_FOREACH(ls, &all_logsinks, ls_global_link) {
     if(level > ls->ls_level)
       continue; // Skip levels that are higher than the configured limit
     if(ls->ls_num_loglines >= MAX_LOGLINES_IN_RAM) {
@@ -653,7 +622,7 @@ static logsink_t *
 logsink_find(const ntv_t *config)
 {
   logsink_t *ls;
-  LIST_FOREACH(ls, &logsinks, ls_link) {
+  LIST_FOREACH(ls, &configured_logsinks, ls_config_link) {
     if(!ntv_cmp(ls->ls_conf, config))
       return ls;
   }
@@ -667,7 +636,8 @@ logsink_create(const ntv_t *config)
   logsink_t *ls = calloc(1, sizeof(logsink_t));
   TAILQ_INIT(&ls->ls_lines);
   TAILQ_INIT(&ls->ls_sent_lines);
-  LIST_INSERT_HEAD(&logsinks, ls, ls_link);
+  LIST_INSERT_HEAD(&all_logsinks, ls, ls_global_link);
+  LIST_INSERT_HEAD(&configured_logsinks, ls, ls_config_link);
   pthread_cond_init(&ls->ls_cond, NULL);
   ls->ls_conf = ntv_copy(config);
   ls->ls_level = ntv_get_int(config, "level", 7);
@@ -700,7 +670,7 @@ logging_reconfigure(const ntv_t *cfg)
   pthread_mutex_lock(&log_mutex);
 
   logsink_t *ls;
-  LIST_FOREACH(ls, &logsinks, ls_link) {
+  LIST_FOREACH(ls, &configured_logsinks, ls_config_link) {
     ls->ls_mark = 1;
   }
 
@@ -728,20 +698,21 @@ logging_reconfigure(const ntv_t *cfg)
   LIST_INIT(&logsink_reap_list);
 
   logsink_t *n;
-  for(ls = LIST_FIRST(&logsinks); ls != NULL; ls = n) {
-    n = LIST_NEXT(ls, ls_link);
+  for(ls = LIST_FIRST(&configured_logsinks); ls != NULL; ls = n) {
+    n = LIST_NEXT(ls, ls_config_link);
     if(!ls->ls_mark)
       continue;
     ls->ls_running = 0;
     pthread_cond_signal(&ls->ls_cond);
-    LIST_REMOVE(ls, ls_link);
-    LIST_INSERT_HEAD(&logsink_reap_list, ls, ls_link);
+    LIST_REMOVE(ls, ls_config_link);
+    LIST_REMOVE(ls, ls_global_link);
+    LIST_INSERT_HEAD(&logsink_reap_list, ls, ls_config_link);
   }
   pthread_mutex_unlock(&log_mutex);
 
   while((ls = LIST_FIRST(&logsink_reap_list)) != NULL) {
     pthread_join(ls->ls_tid, NULL);
-    LIST_REMOVE(ls, ls_link);
+    LIST_REMOVE(ls, ls_config_link);
     logsink_destroy(ls);
   }
 
