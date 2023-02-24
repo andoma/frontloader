@@ -720,22 +720,3 @@ logging_reconfigure(const ntv_t *cfg)
 }
 
 CONFIG_SUB(logging_reconfigure, "logging", 10);
-
-
-
-static void
-stats_log(struct ntv *gauges, struct ntv *rates)
-{
-  return;
-
-  ntv_set(rates, "lb.frontloader.syslog_sent",
-          atomic_get_and_set(&stats_log_sent, 0));
-  ntv_set(rates, "lb.frontloader.syslog_acks_rcvd",
-          atomic_get_and_set(&stats_acks_rcvd, 0));
-  ntv_set(rates, "lb.frontloader.syslog_acks_bad",
-          atomic_get_and_set(&stats_acks_bad, 0));
-}
-
-
-
-GSTATS(stats_log);

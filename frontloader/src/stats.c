@@ -208,22 +208,24 @@ stats_collect_thread(void *aux)
 static void
 stats_init(void)
 {
-  pthread_attr_t attr;
-  pthread_attr_init(&attr);
-  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-  pthread_t tid;
-  pthread_create(&tid, &attr, stats_collect_thread, NULL);
-  pthread_attr_destroy(&attr);
 }
 
 INITME(stats_init, NULL, 2);
 
+static pthread_t stats_tid;
 
 
 static int
 datadog_reconfigure(const ntv_t *config)
 {
   const ntv_t *dd = ntv_get_map(config, "datadog");
+
+  if(dd == NULL)
+    return 0;
+
+  if(!stats_tid) {
+    pthread_create(&stats_tid, NULL, stats_collect_thread, NULL);
+  }
 
   pthread_mutex_lock(&datadog_config_mutex);
   strset(&datadog_api_key, ntv_get_str(dd, "api_key"));
