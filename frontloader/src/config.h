@@ -5,6 +5,11 @@
 struct ntv;
 typedef int (config_update_cb_t)(const struct ntv *cfg);
 
+int config_apply(struct ntv *cfg, const char *source); // Takes ownership of cfg
+
+int config_apply_json(const char *json, const char *source);
+
+
 typedef struct config_registration {
   config_update_cb_t *cb;
   const char *name;

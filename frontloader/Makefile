@@ -13,6 +13,7 @@ BUILD ?= $(shell uname)
 
 CSTANDARD  := gnu11
 CFLAGS_opt := -O2
+CFLAGS += -iquotesrc
 
 BUILDDIR = ${CURDIR}/build.${BUILD}
 
@@ -31,6 +32,11 @@ SRCS =  src/main.c \
 	src/sysupgrade.c \
 	src/control.c \
 	src/sysparams.c \
+
+SRCS += \
+	src/cloud/aws.c \
+	src/cloud/azure_config.c \
+	src/cloud/azure_monitor.c \
 
 
 CFLAGS += -DCONFIGKEY=\"${CONFIGKEY}\"
