@@ -42,18 +42,16 @@ static atomic_t stats_acks_bad;
 // All logsinks that want output
 static struct logsink_list all_logsinks;
 
-// logsinks configured from config system
-static struct logsink_list configured_logsinks;
 
 
+pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static int logdir;
 static int syslogfd = -1;
 static int devconsole = -1;
 static int logfilesize;
 static int log_system_completed;
-static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
-static struct logline_queue early_loglines;
+static struct logline_queue early_loglines = TAILQ_HEAD_INITIALIZER(early_loglines);
 static int num_early_loglines;
 
 static uint64_t msgid_generator;
@@ -90,6 +88,24 @@ static const char *facilities[] = {
   "local7",
 };
 
+void
+logline_destroy(logline_t *l)
+{
+  free(l->msg);
+  free(l->procname);
+  free(l);
+}
+
+const char *
+logline_faclility_str(const logline_t *l)
+{
+  unsigned int fac = l->pri >> 3;
+  if(fac > 23)
+    return "unknown";
+  return facilities[fac];
+
+}
+
 
 static void
 send_logline(struct timeval *tv, int pid, int pri,
@@ -125,16 +141,14 @@ send_early_loglines(void)
   while((l = TAILQ_FIRST(&early_loglines)) != NULL) {
     TAILQ_REMOVE(&early_loglines, l, link);
     send_logline(&l->tv, l->pid, l->pri, l->procname, l->msg);
-    free(l->msg);
-    free(l->procname);
-    free(l);
+    logline_destroy(l);
   }
   num_early_loglines = 0;
 }
 
 
-static void
-writelog(int pri, const char *procname, int pid, const char *msg)
+void
+logging_append(int pri, const char *procname, int pid, const char *msg)
 {
   const int level = pri & 7;
   scoped_char *line = NULL;
@@ -261,7 +275,7 @@ parse_process(int pri, char *s)
     return 1;
   s += 3;
   *c1 = 0;
-  writelog(pri, procname, pid, s);
+  logging_append(pri, procname, pid, s);
   return 0;
 }
 
@@ -308,7 +322,7 @@ devlog_thread(void *aux)
     }
 
     if(parse_process(pri, m)) {
-      writelog(pri, NULL, 0, m);
+      logging_append(pri, NULL, 0, m);
     }
   }
 
@@ -366,7 +380,7 @@ klog_thread(void *aux)
             m++;
         }
 
-        writelog(pri, "kernel", 0, m);
+        logging_append(pri, "kernel", 0, m);
 
         i++;
         memmove(buf, buf + i, len - i);
@@ -393,6 +407,66 @@ klog_init(void)
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
   pthread_create(&tid, &attr, klog_thread, (void *)(intptr_t)fd);
 }
+
+
+void
+logging_early_init(void)
+{
+  logdir = open("/var/log", O_PATH | O_CLOEXEC);
+  devconsole = open("/dev/console", O_WRONLY);
+  klog_init();
+  devlog_init();
+}
+
+
+
+logsink_t *
+logsink_find(const ntv_t *config, struct logsink_list *list)
+{
+  logsink_t *ls;
+  LIST_FOREACH(ls, list, ls_config_link) {
+    if(!ntv_cmp(ls->ls_conf, config))
+      return ls;
+  }
+  return NULL;
+}
+
+logsink_t *
+logsink_create(const ntv_t *config, struct logsink_list *list)
+{
+  logsink_t *ls = calloc(1, sizeof(logsink_t));
+  TAILQ_INIT(&ls->ls_lines);
+  TAILQ_INIT(&ls->ls_sent_lines);
+  LIST_INSERT_HEAD(&all_logsinks, ls, ls_global_link);
+  LIST_INSERT_HEAD(list, ls, ls_config_link);
+
+  pthread_condattr_t cond_attr;
+  pthread_condattr_init(&cond_attr);
+  pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC);
+  pthread_cond_init(&ls->ls_cond, &cond_attr);
+  pthread_condattr_destroy(&cond_attr);
+
+  ls->ls_conf = ntv_copy(config);
+  ls->ls_level = ntv_get_int(config, "level", 7);
+  ls->ls_running = 1;
+  return ls;
+}
+
+void
+logsink_destroy(logsink_t *ls)
+{
+  struct logline *l;
+  while((l = TAILQ_FIRST(&ls->ls_lines)) != NULL) {
+    TAILQ_REMOVE(&ls->ls_lines, l, link);
+    logline_destroy(l);
+  }
+  ntv_release(ls->ls_conf);
+  free(ls->ls_ack_wait_hash);
+  free(ls);
+}
+
+
+
 
 
 
@@ -434,9 +508,7 @@ recv_ack_thread(void *aux)
         TAILQ_REMOVE(&ls->ls_sent_lines, l, link);
         LIST_REMOVE(l, hash_link);
         ls->ls_num_loglines--;
-        free(l->msg);
-        free(l->procname);
-        free(l);
+        logline_destroy(l);
       } else {
         atomic_inc(&stats_acks_bad);
       }
@@ -569,9 +641,7 @@ remote_syslog_thread(void *aux)
         LIST_INSERT_HEAD(ls->ls_ack_wait_hash + bucket, l, hash_link);
       } else {
         ls->ls_num_loglines--;
-        free(l->msg);
-        free(l->procname);
-        free(l);
+        logline_destroy(l);
       }
     }
 
@@ -605,80 +675,67 @@ remote_syslog_thread(void *aux)
 }
 
 
+void
+logsinks_lock_mark(struct logsink_list *list)
+{
+  logsink_t *ls;
+
+  pthread_mutex_lock(&log_mutex);
+
+  LIST_FOREACH(ls, list, ls_config_link) {
+    ls->ls_mark = 1;
+  }
+}
 
 
 void
-logging_early_init(void)
+logsinks_sweep_unlock_reap(struct logsink_list *list)
 {
-  TAILQ_INIT(&early_loglines);
-  logdir = open("/var/log", O_PATH | O_CLOEXEC);
-  devconsole = open("/dev/console", O_WRONLY);
-  klog_init();
-  devlog_init();
-}
+  log_system_completed = 1;
+  send_early_loglines();
 
-
-static logsink_t *
-logsink_find(const ntv_t *config)
-{
   logsink_t *ls;
-  LIST_FOREACH(ls, &configured_logsinks, ls_config_link) {
-    if(!ntv_cmp(ls->ls_conf, config))
-      return ls;
+  // First, while locked, remove logsink for global list and shut down thread
+
+  LIST_FOREACH(ls, list, ls_config_link) {
+    if(!ls->ls_mark)
+      continue;
+    ls->ls_running = 0;
+    pthread_cond_signal(&ls->ls_cond);
+    LIST_REMOVE(ls, ls_global_link);
   }
-  return NULL;
-}
 
+  pthread_mutex_unlock(&log_mutex);
 
-static logsink_t *
-logsink_create(const ntv_t *config)
-{
-  logsink_t *ls = calloc(1, sizeof(logsink_t));
-  TAILQ_INIT(&ls->ls_lines);
-  TAILQ_INIT(&ls->ls_sent_lines);
-  LIST_INSERT_HEAD(&all_logsinks, ls, ls_global_link);
-  LIST_INSERT_HEAD(&configured_logsinks, ls, ls_config_link);
-  pthread_cond_init(&ls->ls_cond, NULL);
-  ls->ls_conf = ntv_copy(config);
-  ls->ls_level = ntv_get_int(config, "level", 7);
-  ls->ls_running = 1;
-  return ls;
-}
-
-static void
-logsink_destroy(logsink_t *ls)
-{
-  struct logline *l;
-  while((l = TAILQ_FIRST(&ls->ls_lines)) != NULL) {
-    TAILQ_REMOVE(&ls->ls_lines, l, link);
-    free(l->msg);
-    free(l->procname);
-    free(l);
+  // Then, after we've unlocked, we can join the threads and destroy the sinks
+  logsink_t *n;
+  for(ls = LIST_FIRST(list); ls != NULL; ls = n) {
+    n = LIST_NEXT(ls, ls_config_link);
+    if(!ls->ls_mark)
+      continue;
+    LIST_REMOVE(ls, ls_config_link);
+    pthread_join(ls->ls_tid, NULL);
+    logsink_destroy(ls);
   }
-  ntv_release(ls->ls_conf);
-  free(ls->ls_ack_wait_hash);
-  free(ls);
 }
 
 
 static int
 logging_reconfigure(const ntv_t *cfg)
 {
+  // logsinks configured from config system
+  static struct logsink_list configured_logsinks;
+
   const ntv_t *cfged_sinks = ntv_get_list(cfg, "logsinks");
   // Handle reset of logsetup now that we have config
 
-  pthread_mutex_lock(&log_mutex);
-
-  logsink_t *ls;
-  LIST_FOREACH(ls, &configured_logsinks, ls_config_link) {
-    ls->ls_mark = 1;
-  }
+  logsinks_lock_mark(&configured_logsinks);
 
   if(cfged_sinks != NULL) {
 
     NTV_FOREACH_TYPE(l, cfged_sinks, NTV_MAP) {
 
-      logsink_t *ls = logsink_find(l);
+      logsink_t *ls = logsink_find(l, &configured_logsinks);
       if(ls != NULL) {
         ls->ls_mark = 0;
         continue;
@@ -686,36 +743,13 @@ logging_reconfigure(const ntv_t *cfg)
 
       const char *type = ntv_get_str(l, "type");
       if(!strcmp(type, "syslog")) {
-        ls = logsink_create(l);
+        ls = logsink_create(l, &configured_logsinks);
         pthread_create(&ls->ls_tid, NULL, remote_syslog_thread, ls);
       }
     }
   }
-  log_system_completed = 1;
-  send_early_loglines();
 
-  LIST_HEAD(, logsink) logsink_reap_list;
-  LIST_INIT(&logsink_reap_list);
-
-  logsink_t *n;
-  for(ls = LIST_FIRST(&configured_logsinks); ls != NULL; ls = n) {
-    n = LIST_NEXT(ls, ls_config_link);
-    if(!ls->ls_mark)
-      continue;
-    ls->ls_running = 0;
-    pthread_cond_signal(&ls->ls_cond);
-    LIST_REMOVE(ls, ls_config_link);
-    LIST_REMOVE(ls, ls_global_link);
-    LIST_INSERT_HEAD(&logsink_reap_list, ls, ls_config_link);
-  }
-  pthread_mutex_unlock(&log_mutex);
-
-  while((ls = LIST_FIRST(&logsink_reap_list)) != NULL) {
-    pthread_join(ls->ls_tid, NULL);
-    LIST_REMOVE(ls, ls_config_link);
-    logsink_destroy(ls);
-  }
-
+  logsinks_sweep_unlock_reap(&configured_logsinks);
   return 0;
 }
 
