@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "config.h"
+#include "dmi.h"
 
 #include "libsvc/atomic.h"
 #include "libsvc/vec.h"
@@ -184,6 +185,21 @@ config_init(const char *url)
   VEC_SORT(&config_update_fns, config_fns_cmp);
 
   const char *fl_env = getenv("FL_ENV");
+
+  scoped_char *bios_vendor = dmi_get_string(0, 0, 4);
+  scoped_char *bios_version = dmi_get_string(0, 0, 5);
+
+  trace(LOG_INFO, "Bios Vendor: %s   Bios Version: %s",
+        bios_vendor ?: "???", bios_version ?: "???");
+
+  if(fl_env == NULL) {
+    // Hosting environment not set, try to guess it from DMI info
+    if(bios_vendor && !strcmp(bios_vendor, "Microsoft Corporation") &&
+       bios_version && !strncmp(bios_version, "Hyper-V UEFI", 12)) {
+      fl_env = "azure";
+    }
+  }
+
   if(fl_env != NULL) {
     if(!strcmp(fl_env, "ec2")) {
       // We run under EC2
