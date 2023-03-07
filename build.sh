@@ -2,7 +2,7 @@
 set -e
 set -x
 
-NV_DRIVER_VERSION=515.57
+NV_DRIVER_VERSION=525.89.02
 
 
 echo "Buildind frontloader image ${FRONTLOADER_GIT_VERSION} Nvidia driver: ${NV_DRIVER_VERSION}"

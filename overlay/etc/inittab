@@ -27,9 +27,6 @@ null::sysinit:/bin/ln -sf /proc/self/fd/2 /dev/stderr
 # now run any rc scripts
 #::sysinit:/etc/init.d/rcS
 
-::sysinit:/bin/rm -f /etc/resolv.conf
-::sysinit:/bin/ln -s /proc/net/pnp /etc/resolv.conf
-
 ::sysinit:/usr/sbin/ethtool -K eth0 gso off
 
 ::sysinit:/usr/bin/nvidia-modprobe
@@ -40,9 +37,7 @@ null::sysinit:/bin/ln -sf /proc/self/fd/2 /dev/stderr
 
 ::sysinit:/bin/mknod -m 666 /dev/nvidiactl c 195 255
 
-::sysinit:/usr/local/bin/ec2sshserver
-
-::sysinit:/sbin/dhcpcd -6 eth0
+::sysinit:/sbin/dhcpcd eth0
 
 ::respawn:/usr/bin/frontloader -l -s local0
 
