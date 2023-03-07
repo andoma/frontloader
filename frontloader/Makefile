@@ -32,6 +32,7 @@ SRCS =  src/main.c \
 	src/sysupgrade.c \
 	src/control.c \
 	src/sysparams.c \
+	src/dmi.c \
 
 SRCS += \
 	src/cloud/aws.c \
